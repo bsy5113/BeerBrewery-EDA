@@ -1,0 +1,457 @@
+---
+title: "MSDS 6306 Project Craft Breweries and Beers Analysis"
+author: "Bethel Kumsa and Bosang Yun"
+date: "7/4/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction & Dataset
+
+Through this project we analyzed data regarding craft beers and corresponding breweries from the dataset provided. The Beers dataset contains a list of 2410 US craft beers and the Breweries dataset contains 558 US breweries. 
+
+```{r libraries, echo=FALSE}
+library(mvtnorm)
+library(reshape2)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(maps)
+library(ggthemes)
+library(stringr)
+library(ggplot2)
+library(sp)
+library(rgeos)
+library(class)
+library(caret)
+library(e1071)
+library(usmap)
+
+
+#Importing Beers Dataset
+beersDataset <- read.csv("~/Desktop/SMU Project/Beers.csv", header = TRUE)
+
+#Importing Breweries Dataset
+breweriesDataset <- read.csv("~/Desktop/SMU Project/Breweries.csv", header = TRUE)
+```
+
+## (1) Breweries by State
+
+How many breweries are present in each state?
+
+```{r breweriesByState}
+breweriesState <- summary(as.factor(breweriesDataset$state))
+
+breweriesState
+breweriesState <- data.frame(abb = names(breweriesState), numBreweries = unname(breweriesState))
+breweriesState$abb <- as.character(breweriesState$abb)
+breweriesState$abb <- str_replace_all(breweriesState$abb, " ", "")
+
+#Heatmap
+lookup <- data.frame(abb = state.abb, region = tolower(state.name))
+lookup$abb <- as.character(lookup$abb)
+states <- map_data("state")
+
+#There are 1 Brewery in DC, 4 Breweries in Hawaii, and 7 Breweries in Alaska not depicted on the map.
+breweryByRegion <- merge(breweriesState, lookup, by = "abb", all.y = TRUE)
+breweryMapDF <- merge(breweryByRegion, states, "region", all.y = TRUE)
+breweryMapDF <- breweryMapDF [order(breweryMapDF$order),]
+
+#Heatmap of breweries by state.
+breweriesByStateHeatmap <- breweryMapDF %>% ggplot(aes(x=long,y=lat,group=group))+
+  geom_polygon(aes(fill=numBreweries))+
+  geom_path()+ 
+  scale_fill_gradientn(colours=rev(heat.colors(10)),na.value="grey90") +
+  coord_map()+
+  ggtitle("Breweries by State") +
+  labs(fill='Number of Breweries', subtitle = "1 Brewery in DC, 4 Breweries in Hawaii, 7 Breweries in Alaska") +
+  theme_economist() +
+  theme(plot.title = element_text(size=25),
+        legend.position = "bottom",
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y =element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+
+breweriesByStateHeatmap
+
+#Horizontal Bar Graph
+breweriesDataset %>% ggplot(mapping=aes(x=forcats::fct_infreq(state)))+
+  geom_bar(position = position_dodge(width = 1), width=0.85)+
+  stat_count(aes(label = ..count..), geom = "text",size=2.5, hjust = -0.5)+
+  labs(y="Count", x = "State")+
+  theme_economist()+
+  theme(text = element_text(size=5),
+        plot.title = element_text(size=25),
+        axis.text.x = element_text(size=6, angle = 90), 
+        axis.text.y = element_text(size=6),
+        axis.title=element_text(size=10,face="bold"))+
+  coord_flip()+
+  ggtitle("Breweries Across the United States")
+
+```
+
+## (2) Merging Original Beers and Breweries Data Sets
+
+Merge beer data with the breweries data. Print the first 6 observations and the last six observations to check the merged file. (RMD only, this does not need to be included in the presentation or the deck.)
+
+```{r mergeOriginalDataSets}
+beerAndBrew <- merge(breweriesDataset, beersDataset, by.x = "Brew_ID",by.y = "Brewery_id", all=TRUE)
+names(beerAndBrew)[2] = "Brewery_Name"
+names(beerAndBrew)[5] = "Beer_Name"
+```
+
+## (3) Address the Missing Values in Each Column
+
+```{r missingValues}
+
+missingVals <- is.na(beerAndBrew)
+missingVals <- data.frame(Brew_ID = missingVals[,1], Brewery_Name = missingVals[,2], City = missingVals[,3],
+           State = missingVals[,4], Beer_Name = missingVals[,5], Beer_ID = missingVals[,6],
+           ABV = missingVals[,7], IBU = missingVals[,8], Style = missingVals[,9], Ounces = missingVals[,10])
+
+summary(missingVals)
+missingValsCol <- colSums(missingVals)
+missingValsCol <- data.frame(columnName = names(missingValsCol), 
+                             totalMissingVals = unname(missingValsCol))
+missingValsCol
+
+```
+##### Question 3 - Answer : Reason why there are missing values for ABV and IBU. 
+##### * ABV is missing 62 values and this insignificant compared to over 2000 data points. Thus it is negligible. 
+##### * 1 IBU = 1mg/L of iso-alpha acids in solution
+##### * Once the beer leaves the laboratory, many factors such as hop components, roast character, carbonation, water chemistry, and residual sugar, all have influence on altering the IBU content. This makes IBU highly debatable at consumer level. If measurements outside of a lab environment are so unreliable that they should not be taken, extrapolating would be inappropriate as well since this measurement is highly sensitive to time and environment. 
+
+
+
+
+
+## (4) Median ABV and IBU by State
+
+Compute the median alcohol content and international bitterness unit for each state. Plot a bar chart to compare.
+
+```{r ABVandIBU}
+
+medianABVandIBU <- beerAndBrew %>% group_by(state) %>% summarize(medianStateABV = median(ABV, na.rm = TRUE), 
+            medianStateIBU = median(IBU, na.rm = TRUE), count = n())
+
+meanABVandIBU <- beerAndBrew %>% group_by(state) %>% summarize(meanStateABV = mean(ABV, na.rm = TRUE),
+                                                                 meanStateIBU = mean(IBU, na.rm = TRUE), count = n())
+
+medianABVandIBU <- as.data.frame(medianABVandIBU)
+
+medianABVandIBU %>% ggplot(mapping = aes(x = reorder(state, -medianStateABV))) + 
+  geom_bar(aes(weight = medianStateABV), color = "orange") +
+  ggtitle("Alcohol Content by State") + 
+  ylab("Median Alcohol by Volume") + xlab("State") +
+  theme_economist() + 
+  theme(plot.title = element_text(size=25),
+        text = element_text(size=12),
+        legend.position = "none",
+        axis.text.x = element_text(size=8,angle = 90, hjust = 1, vjust = 1),
+        axis.text.y = element_text(size=10))
+
+
+abv <- beerAndBrew %>% group_by(state) %>% summarize(medianABV = median(ABV,na.rm=TRUE))
+abv <- data.frame(abv)
+ibu <- beerAndBrew %>% group_by(state) %>% summarize(medianIBU = median(IBU,na.rm=TRUE))
+
+#Merging median ABV and median IBU data and stacking
+df=merge(abv,ibu, by = "state")
+dfM=melt(df,id.vars = "state")
+
+na.omit(dfM) %>% ggplot(mapping=aes(x =reorder(state, -value), y = value, color=variable)) + 
+  geom_col()+
+  theme_economist()+
+  facet_grid(variable ~ .,scales='free')+
+  xlab("State")+
+  ylab("Value")+
+  labs(color="Variable") +
+  ggtitle("Median ABV & IBU for each State") +
+  theme(text = element_text(size=10), #labels 
+        axis.text.x = element_text(size=8,angle = 90, hjust = 1, vjust = 1),
+        axis.text.y = element_text(size=10),
+        axis.title = element_text(size=12,face="bold"),
+        plot.title = element_text(size=25),
+        legend.position = "none")
+
+#Boxplots to layer aboved bar charts for presentation.
+par(mfrow=c(2,1))
+boxplot(medianABVandIBU$medianStateABV, col = "cyan", horizontal = TRUE, main = "Median State ABV")
+boxplot(medianABVandIBU$medianStateIBU, col = "cyan", horizontal = TRUE, main = "Median State IBU")
+dev.off()
+
+```
+##### Question 4 - Answer : Comparing the median international bitterness unit for each state, we find wide variations between scores of 60 and 20. When comparing the two measures, ABV vs IBU, we see a much wider variation in the state’s median IBU scores than we do in the states’ median ABV scores. Further, West Virginia has the highest average IBU of any state, with the bitterest American beer coming from Oregon and explicitly named for its bitter characteristic.
+
+
+
+
+
+## (5) Highest ABV and IBU
+Which state has the maximum alcoholic (ABV) beer? Which state has the most bitter (IBU) beer?
+
+
+```{r HighestABVandIBU}
+
+meanABVandIBU[which.max(meanABVandIBU$meanStateABV),1] #NV
+medianABVandIBU[which.max(medianABVandIBU$medianStateABV),1] #DC
+meanABVandIBU[which.max(meanABVandIBU$meanStateIBU),1] #WV
+medianABVandIBU[which.max(medianABVandIBU$medianStateIBU),1] #ME
+
+```
+##### Question 5 - Answer : State with maximum alcohholic beer is Nevada, State with most bitter beer : West Virginia.
+
+
+
+
+
+## (6) ABV Distribution 
+Comment on the summary statistics and distribution of the ABV variable.
+
+```{r ABVDistribution}
+
+summary(beerAndBrew$ABV)
+hist(beerAndBrew$ABV, main = "Distribution of ABV", xlab = "Alcohol by Volume", 
+     ylab = "Number of Beers", col = "light cyan")
+
+beerAndBrew %>% ggplot(mapping = aes(x= ABV)) +
+  geom_histogram(color = "orange") +
+  ggtitle("Distribution of ABV") + 
+  ylab("Number of Beers") + xlab("Alcohol by Volume") +
+  theme_economist() +
+  theme(plot.title = element_text(size=30))
+
+```
+##### Question 6 - Answer : The ABV distribution looks fairly looks normal but a little bit right skewed due to some extreme outliers that are in the 8-10% range. 
+
+
+
+
+
+##(7) Bitterness vs Alcoholic Content
+
+Is there an apparent relationship between the bitterness of the beer and its alcoholic content? Draw a scatter plot.  Make your best judgment of a relationship and EXPLAIN your answer.
+
+```{r IBUvsABV}
+
+beerAndBrew %>% ggplot(mapping = aes(x= IBU, y = ABV)) + 
+  geom_point(position = "jitter", color = "dark blue",pch=21) +
+  ggtitle("Bitterness vs Alcoholic Content for each State") + 
+  ylab("Alcohol by Volume") + xlab("International Bitterness Unit") +
+  theme_economist() +
+  theme(plot.title = element_text(size=20), legend.position = "none")
+
+```
+#### Question 7 - Answer : There seems to be a linear relationship between ABV and IBU, meaning ABV goes up, IBU also goes up. 
+
+
+
+
+
+##(8) KNN & Naive Bayes
+
+Budweiser would also like to investigate the difference with respect to IBU and ABV between IPAs (India Pale Ales) and other types of Ale (any beer with “Ale” in its name other than IPA).  You decide to use KNN classification to investigate this relationship.  Provide statistical evidence one way or the other. You can of course assume your audience is comfortable with percentages … KNN is very easy to understand conceptually.
+
+In addition, while you have decided to use KNN to investigate this relationship (KNN is required) you may also feel free to supplement your response to this question with any other methods or techniques you have learned. Creativity and alternative solutions are always encouraged.  
+
+```{r classificationModels}
+beerAndBrew$Beer_Name2 <- str_replace_all(beerAndBrew$Beer_Name, "\\.", "")
+beerAndBrew$Style2 <- str_replace_all(beerAndBrew$Style, "\\.", "")
+
+beerAndBrew$Beer_Name2 <- str_to_upper(beerAndBrew$Beer_Name2)
+beerAndBrew$Style2 <- str_to_upper(beerAndBrew$Style2)
+
+#Next seven lines of code must be completed in the order listed.
+beerAndBrew$Ale <- "Not Ale" 
+beerAndBrew$Ale[grep("ALE",ignore.case = TRUE, beerAndBrew$Beer_Name2)] <-  "Ale"
+beerAndBrew$Ale[grep("ALE",ignore.case = TRUE, beerAndBrew$Style2)] <- "Ale"
+#514 ales found in beer style that are not found in beer name.
+beerAndBrew$Ale[grep("INDIA PALE ALE",ignore.case = TRUE, beerAndBrew$Beer_Name2)] <- "IPA"
+beerAndBrew$Ale[grep("IPA",ignore.case = TRUE, beerAndBrew$Beer_Name2)] <- "IPA"
+beerAndBrew$Ale[grep("INDIA PALE ALE",ignore.case = TRUE, beerAndBrew$Style2)] <-"IPA"
+beerAndBrew$Ale[grep("IPA",ignore.case = TRUE, beerAndBrew$Style2)] <- "IPA"
+#200 IPA's found in beer stlye that are not found in beer name.
+
+#Changing to factor to view a quick summary of how many IPA, Ale, and Not Ale beers were found.
+beerAndBrew$Ale <- as.factor(beerAndBrew$Ale)
+summary(beerAndBrew$Ale)
+
+#Saving all the IPA's and other ales into one dataframe by excluding not ale.
+Ales <- beerAndBrew[-grep("Not Ale",ignore.case = TRUE, beerAndBrew$Ale),]
+Ales <- droplevels(Ales)
+
+summary(is.na.data.frame(Ales))
+#642 missing IBU values within Ale subset, and 44 missing ABV values within ale subset.
+Ales <- na.omit(Ales)
+
+
+#Tuning K
+#***********************************************************************************************
+splitPerc = .70
+iterations = 500
+numks = 30
+
+masterAcc = matrix(nrow = iterations, ncol = numks)
+
+for(j in 1:iterations)
+{
+  trainIndicesAlesIter = sample(1:dim(Ales)[1],round(splitPerc * dim(Ales)[1]))
+  train = Ales[trainIndicesAlesIter,]
+  test = Ales[-trainIndicesAlesIter,]
+  for(i in 1:numks)
+  {
+    classifications = knn(train[,c(7,8)],test[,c(7,8)],train$Ale, prob = TRUE, k = i)
+    CM = confusionMatrix(table(classifications,test$Ale))
+    masterAcc[j,i] = CM$overall[1]
+  }
+}
+
+MeanAcc = colMeans(masterAcc)
+
+plot(seq(1,numks,1),MeanAcc, type = "l", main = "Tunning K for External Cross-Validation", 
+     xlab = "Value of K", ylab = "Mean Accuracy of 500 Iterations")
+
+which.max(MeanAcc)
+#***********************************************************************************************
+
+#K-nn with tuned K = 5
+set.seed(6)
+trainIndiciesAles = sample(1:dim(Ales)[1],round(splitPerc * dim(Ales)[1]))
+trainAles = Ales[trainIndiciesAles,]
+testAles = Ales[-trainIndiciesAles,]
+confusionMatrix(table(knn(trainAles[,c(7,8)],testAles[,c(7,8)],trainAles$Ale, k = 5),testAles$Ale))
+
+#Scatterplot of IBU vs ABV for IPA vs Other Ales
+Ales %>% ggplot(mapping = aes(x= IBU, y = ABV, color = Ale)) + 
+  geom_point(position = "jitter") +
+  ggtitle("IPA vs Other Ales") + 
+  ylab("Alcohol by Volume") + xlab("International Bitterness Unit") +
+  theme_economist() +
+  theme(plot.title = element_text(size=50), legend.title = element_blank())
+
+#Using Naive Bayes
+model = naiveBayes(trainAles[,c(7,8)],as.factor(trainAles$Ale), laplace=1)
+table(predict(model,testAles[,c(7,8)]),as.factor(testAles$Ale))
+CMnb=confusionMatrix(table(predict(model,testAles[,c(7,8)]),as.factor(testAles$Ale)))
+CMnb
+
+```
+##### Question 8 - Answer: 5 is the tuned K value based on 500 repeated simulation with 30 different K values. Knn produces slightly higher Accuracy than NB model
+
+
+
+
+
+## (9) Useful Inference
+
+Knock their socks off!  Find one other useful inference from the data that you feel Budweiser may be able to find value in.  You must convince them why it is important and back up your conviction with appropriate statistical evidence.   
+
+```{r UsefulInference}
+
+RPI2012 <- na.omit(read.csv("~/Desktop/SMU Project/RPI.csv", header = TRUE)) 
+RPI2012 <- RPI2012[c(2,12,13)]  
+names(RPI2012)[1] = "region"
+names(RPI2012)[2] = "RPI_2012"
+names(RPI2012)[3] = "RPI_Bracket"
+RPI2012$region <- str_to_lower(RPI2012$region)
+
+breweryByRegion <- merge(RPI2012, breweryByRegion, by = "region", all.y = TRUE)
+
+#Scatterplot of Income vs Number of Breweries by State
+breweryByRegion %>% ggplot(mapping = aes(x= RPI_2012, y = numBreweries, size = numBreweries, color = "light red")) + 
+  geom_point(position = "jitter") +
+  guides(size=FALSE) + #Removes the legend for size 
+  ggtitle("Income vs Number of Breweries by State") + 
+  labs(subtitle = "Real personal income was used as it is adjusted for cost of living in each state.") +
+  ylab("Number of Breweries") + xlab("Real Personal Income by State") +
+  theme_economist() +
+  theme(plot.title = element_text(size=30), legend.position = "none")
+
+#Pie chart of Breweires by Income Bracket
+breweryByRegion %>% ggplot(mapping = aes(x="", y=numBreweries, fill=RPI_Bracket)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0) +
+  ggtitle("State's Personal Income Bracket vs Number of Breweries") + 
+  labs(subtitle = "Real personal income was used as it is adjusted for cost of living in each state.") +
+  ylab("Number of Breweries") +
+  theme_economist() +
+  theme(plot.title = element_text(size=20), legend.position = "bottom", legend.title = element_blank())
+
+
+#Per Capita
+#Listing ABV of all Budweiser brands
+#Bud Light : 4.2%
+#Budweiser : 5%
+#Bud Ice : 5.5%
+#Bud light lime : 4.2%
+#Average of these beers : 4.725%
+
+#Find states that have mean ABV values of between 4% and 5%
+Meanabv <- beerAndBrew %>% group_by(state) %>% summarize(meanABV = mean(ABV,na.rm=TRUE))
+Meanabv=data.frame(Meanabv)
+
+Meanabv %>% ggplot(aes(x = reorder(state, -meanABV), y = meanABV))+
+  geom_col()+
+  labs(y="MeanABV", x = "State")+
+  ggtitle("Mean ABV for each State")+
+  theme_economist()+
+  theme(text = element_text(size=10),axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1))
+ 
+filtered <- Meanabv %>% filter(meanABV < 0.056)
+arrange(filtered,meanABV)
+
+#Alcohol consumption per capita
+percapita <- read.csv("~/Desktop/SMU Project/Percapita.csv", header=TRUE)
+
+filtered1 <- percapita %>% filter(Gallons.per.capita > 1.27)
+arrange(filtered1,-Gallons.per.capita)
+
+percapita %>% ggplot(aes(x = reorder(state, -Gallons.per.capita), y = Gallons.per.capita))+
+  geom_col()+
+  theme(text = element_text(size=10),axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1))+
+  labs(y="Gallons per Capita", x = "State")+
+  ggtitle("Alcohol consumption per capita for each State")+
+  coord_flip() +
+  theme_economist() +
+  geom_text(aes(label=Gallons.per.capita), position=position_dodge(width=0.9), hjust=-0.3)
+  
+
+#Heat map of drink volume per capita
+str(percapita)
+plot_usmap(data = percapita, values = "Gallons.per.capita", color = "red") + 
+  scale_fill_continuous(low = "white", high = "red", name = "Alcohol Consumption per Capita", label = scales::comma) +
+  theme(legend.position = "right")+
+  labs(title = "Alcohol consumption per capita across United States")+
+  theme(plot.title = element_text(size = 26, face = "bold"))
+
+```
+
+### Question 9 - Findings and Conclusion 
+#### Scatterplot of Income vs Number of Breweries by State
+##### * We surprisingly find that breweries are concentrated around low-middle income region. Following Prohibition, strict regulations were set in place with regard to brewing and selling beer. Many of the lasting regulations require that brewers undergo several lengthy and expensive licensure processes and taxing regulations. As such, the barrier to entry is expensive in all resources (time, finances, legal knowledge and services). Further, certain states have withstanding Franchise Laws. Franchise Laws were initially meant to protect distributors by not allowing brewers to break contracts easily with distributors at a time when brewers had the upper hand by virtue of being limited. Now, those laws discourage craft brewers from opening in certain states. An example of these states, is North Dakota, which has one of the highest 2012 Real Personal Incomes in the country. The high barriers to entry and the strict regulations that support them discourage craft brewers from focusing their efforts in states with higher real personal income.
+
+#### Alcohol consumption per capita vs ABV of each state
+##### * We looked for states with low ABV % that are similar to those of Budweiser's products. 
+##### * We also looked for states with high alcohol consumption per capita. 
+##### * Midwesterners drink more beer than other regions across the United States, while Northeasterners drink the least. However, New Hampshire state had the highest alcohol consumption per capita likely due to the state’s low tax on alcohol. Meanwhile, Utah unsurprisingly drinks the least amount of beer per capita, as the predominantly Mormon state largely abstains from alcohol. source: https://vinepair.com/articles/map-states-drink-beer-america-2020/
+
+
+### Below are three candidates for potential investment opportunities.(Based on the ABV distribution of states and alcohol consumption per capita data)
+
+##### * New Hampshire has low ABV %, has only 3 breweries in the state, Has highest alcohol consumption per capita -> Very good market opportunity for Budweiser
+
+##### * North Dakota has 4th lowest ABV%m and 4th highest alcohol consumption 
+
+##### * Wisconsin has 5th lowest ABV% and 9th highest alcohol consumption
+
+##### * What these three state have in common are that they have high alcohol consumption per capita, meaning there is always going to be alcohol demand. They have low ABV % that are similar to our Budweiser offerings. They also have low number of breweries,meaning low competition. These conditions set the stage for us to compete well against their local craft breweries and help establish a huge market dominance in those states. 
+
+
+
